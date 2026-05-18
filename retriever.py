@@ -15,8 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from sentence_transformers import CrossEncoder
-
-from vector_db import MedicalVectorDB
+from vector_db import build_database, MedicalVectorDB
 
 # ─────────────────────────── Cấu hình ───────────────────────────
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -39,11 +38,6 @@ ALPHA_BM25  = 0.4   # tỷ trọng điểm BM25
 
 # ─────────────────────────── BM25 Index ──────────────────────────
 class BM25Index:
-    """
-    Cài đặt BM25 thuần Python — không cần thư viện ngoài,
-    phù hợp với corpus y khoa tiếng Việt.
-    """
-
     def __init__(self, k1: float = 1.5, b: float = 0.75):
         self.k1 = k1
         self.b  = b
@@ -332,8 +326,6 @@ def build_retriever(vector_db: MedicalVectorDB) -> HybridRetriever:
 
 # ─────────────────────────── Main ────────────────────────────────
 if __name__ == "__main__":
-    from vector_db import build_database
-
     print("=== Test Hybrid Retriever ===")
     db = build_database(force_rebuild=False)
     retriever = build_retriever(db)
