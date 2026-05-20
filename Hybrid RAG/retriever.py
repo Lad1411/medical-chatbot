@@ -1,10 +1,6 @@
 """
 retriever.py — Vị trí 2: Advanced RAG Developer (Reranking & Hybrid Search)
-Nhiệm vụ:
-  - Tích hợp BM25 để bắt chính xác tên thuốc/mã bệnh
-  - Hybrid Search: trộn điểm BM25 + Vector Search
-  - Reranking bằng Cross-Encoder (bge-reranker-v2-m3)
-  - Trả về Top 3-5 đoạn context chất lượng nhất
+Đã được đồng bộ và tối ưu hóa với VectorDB mới.
 """
 
 import logging
@@ -15,7 +11,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from sentence_transformers import CrossEncoder
-from vector_db import build_database, MedicalVectorDB
+
+# [CHỈNH SỬA 1]: Import class VectorDB từ file của bạn 
+from vector_db import VectorDB 
 
 # ─────────────────────────── Cấu hình ───────────────────────────
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -50,13 +48,11 @@ class BM25Index:
 
     @staticmethod
     def _tokenize(text: str) -> List[str]:
-        """Tách từ đơn giản cho tiếng Việt (theo khoảng trắng + chuẩn hóa)."""
         text = text.lower()
         text = re.sub(r"[^\w\s]", " ", text)
         return [t for t in text.split() if len(t) > 1]
 
     def fit(self, corpus: List[str]) -> None:
-        """Build BM25 index từ danh sách đoạn văn."""
         self.corpus = corpus
         self.N = len(corpus)
         self.tokenized = [self._tokenize(doc) for doc in corpus]
@@ -65,7 +61,6 @@ class BM25Index:
         lengths = [len(t) for t in self.tokenized]
         self.avgdl = sum(lengths) / self.N if self.N else 1.0
 
-        # Tính IDF
         df: Counter = Counter()
         for tf in self.doc_freqs:
             for term in tf:
@@ -78,7 +73,6 @@ class BM25Index:
             )
 
     def get_scores(self, query: str) -> np.ndarray:
-        """Tính BM25 score cho tất cả documents với query."""
         query_terms = self._tokenize(query)
         scores = np.zeros(self.N)
 
@@ -96,9 +90,6 @@ class BM25Index:
         return scores
 
     def search(self, query: str, top_k: int = 20) -> List[Tuple[int, float]]:
-        """
-        Returns: Danh sách (doc_index, bm25_score) sắp xếp giảm dần.
-        """
         scores = self.get_scores(query)
         ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
         return ranked[:top_k]
@@ -106,40 +97,28 @@ class BM25Index:
 
 # ─────────────────────────── Hybrid Retriever ────────────────────
 class HybridRetriever:
-    """
-    Pipeline tìm kiếm lai ghép Dense Vector Search + BM25,
-    sau đó Rerank bằng Cross-Encoder.
-    """
-
     def __init__(
         self,
-        vector_db: MedicalVectorDB,
+        vector_db: VectorDB, # [CHỈNH SỬA 2]: Đổi type hint thành VectorDB của bạn
         reranker_model: str = RERANKER_MODEL,
     ):
         self.vector_db = vector_db
         self._bm25: Optional[BM25Index] = None
-        self._bm25_corpus: List[Dict[str, Any]] = []   # [{id, text, metadata}]
+        self._bm25_corpus: List[Dict[str, Any]] = []   
         self._reranker: Optional[CrossEncoder] = None
         self._reranker_model = reranker_model
 
-    # ── Build BM25 Index từ corpus đã có trong ChromaDB ──────────
     def build_bm25_index(self) -> None:
-        """
-        Kéo toàn bộ document text từ ChromaDB để build BM25 index.
-        Gọi một lần sau khi ChromaDB đã được populate.
-        """
         logger.info("🔨 Đang build BM25 index từ ChromaDB ...")
-        coll = self.vector_db._collection
-        if coll is None:
-            self.vector_db.get_or_create_collection()
-            coll = self.vector_db._collection
+        
+        # [CHỈNH SỬA 3]: Xóa dấu gạch dưới _collection vì trong class VectorDB của bạn thuộc tính tên là "self.collection"
+        coll = self.vector_db.collection 
 
         total = coll.count()
         if total == 0:
             logger.warning("⚠️  ChromaDB rỗng — BM25 index không có dữ liệu.")
             return
 
-        # Lấy tất cả documents (ChromaDB hỗ trợ get với limit)
         FETCH_BATCH = 5000
         all_docs: List[Dict[str, Any]] = []
         offset = 0
@@ -163,7 +142,6 @@ class HybridRetriever:
         self._bm25.fit(corpus_texts)
         logger.info(f"✅ BM25 index sẵn sàng: {len(all_docs)} documents.")
 
-    # ── Lazy-load Cross-Encoder ───────────────────────────────────
     def _get_reranker(self) -> CrossEncoder:
         if self._reranker is None:
             logger.info(f"🔄 Đang tải Cross-Encoder: {self._reranker_model} ...")
@@ -171,7 +149,6 @@ class HybridRetriever:
             logger.info("✅ Cross-Encoder sẵn sàng.")
         return self._reranker
 
-    # ── Normalize scores về [0, 1] ───────────────────────────────
     @staticmethod
     def _normalize(scores: List[float]) -> List[float]:
         if not scores:
@@ -183,7 +160,27 @@ class HybridRetriever:
 
     # ── Dense Search ──────────────────────────────────────────────
     def _dense_search(self, query: str, top_k: int) -> List[Dict[str, Any]]:
-        return self.vector_db.dense_search(query, top_k=top_k)
+        # [CHỈNH SỬA 4]: Khớp nối hàm search() của bạn và chuẩn hóa định dạng trả về
+        raw_results = self.vector_db.search(query, top_k=top_k)
+        
+        results = []
+        if not raw_results["documents"] or not raw_results["documents"][0]:
+            return results
+            
+        for i in range(len(raw_results["documents"][0])):
+            # QUAN TRỌNG: VectorDB trả về Khoảng cách (Cosine Distance - Càng THẤP càng tốt)
+            # Nhưng thuật toán Hybrid ở dưới lại dùng Score (Càng CAO càng tốt) để tính Normalize & Weight
+            # Do đó, ta phải chuyển: Similarity Score = 1.0 - Cosine Distance
+            distance = raw_results["distances"][0][i]
+            similarity_score = 1.0 - distance 
+            
+            results.append({
+                "id": raw_results["ids"][0][i], # ChromaDB mặc định luôn trả về ids
+                "text": raw_results["documents"][0][i],
+                "metadata": raw_results["metadatas"][0][i],
+                "score": similarity_score # Truyền điểm Similarity vào để tí nữa merge
+            })
+        return results
 
     # ── BM25 Search ───────────────────────────────────────────────
     def _bm25_search(self, query: str, top_k: int) -> List[Dict[str, Any]]:
@@ -213,11 +210,6 @@ class HybridRetriever:
         dense_hits: List[Dict[str, Any]],
         bm25_hits:  List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
-        """
-        Trộn điểm Dense và BM25 bằng weighted average sau khi normalize.
-        Loại bỏ trùng lặp theo id.
-        """
-        # Normalize
         dense_scores = self._normalize([h["score"] for h in dense_hits])
         bm25_scores  = self._normalize([h["score"] for h in bm25_hits])
 
@@ -246,7 +238,6 @@ class HybridRetriever:
         candidates: List[Dict[str, Any]],
         top_k: int = FINAL_TOP_K,
     ) -> List[Dict[str, Any]]:
-        """Dùng Cross-Encoder để chấm điểm lại candidates, giữ top_k."""
         if not candidates:
             return []
 
@@ -267,32 +258,17 @@ class HybridRetriever:
         final_top_k: int = FINAL_TOP_K,
         use_rerank: bool = True,
     ) -> List[Dict[str, Any]]:
-        """
-        Full pipeline: Dense → BM25 → Hybrid Merge → Rerank → Top-K
-
-        Args:
-            query:       Câu hỏi y khoa của người dùng
-            final_top_k: Số context trả về cuối cùng (3-5)
-            use_rerank:  Có chạy Cross-Encoder hay không
-
-        Returns:
-            Danh sách dict: {id, text, metadata, hybrid_score, rerank_score}
-        """
         logger.info(f"🔍 Hybrid Retrieval cho query: '{query[:80]}...'")
 
-        # 1. Dense retrieval
         dense_hits = self._dense_search(query, top_k=INITIAL_DENSE_TOP_K)
         logger.info(f"   Dense hits: {len(dense_hits)}")
 
-        # 2. BM25 retrieval
         bm25_hits = self._bm25_search(query, top_k=INITIAL_BM25_TOP_K)
         logger.info(f"   BM25 hits:  {len(bm25_hits)}")
 
-        # 3. Hybrid merge
         merged = self._hybrid_merge(dense_hits, bm25_hits)
         logger.info(f"   Sau merge: {len(merged)} candidates")
 
-        # 4. Reranking
         if use_rerank and merged:
             final = self._rerank(query, merged, top_k=final_top_k)
             logger.info(f"   Sau rerank: {len(final)} kết quả cuối")
@@ -301,25 +277,20 @@ class HybridRetriever:
 
         return final
 
-    def format_context(self, hits: List[Dict[str, Any]]) -> str:
-        """
-        Định dạng danh sách hits thành chuỗi context đưa vào prompt.
-        """
-        parts = []
-        for i, hit in enumerate(hits, 1):
-            score_info = ""
-            if "rerank_score" in hit:
-                score_info = f" [rerank={hit['rerank_score']:.3f}]"
-            parts.append(f"[Tài liệu {i}{score_info}]\n{hit['text']}")
-        return "\n\n".join(parts)
-
 
 # ─────────────────────────── Factory ─────────────────────────────
-def build_retriever(vector_db: MedicalVectorDB) -> HybridRetriever:
-    """
-    Khởi tạo HybridRetriever đã có BM25 index.
-    """
-    retriever = HybridRetriever(vector_db)
+def build_retriever() -> HybridRetriever:
+    # [CHỈNH SỬA 5]: Tích hợp cơ chế Smart Load (Chỉ nạp Data khi DB rỗng) vào thẳng Factory
+    db = VectorDB()
+    
+    existing_count = db.collection.count()
+    if existing_count == 0:
+        logger.info("-> Database Chroma rỗng! Đang tiến hành tạo dữ liệu VectorDB (Chỉ chạy 1 lần)...")
+        db.build_db(limit=100, batch_size=32)
+    else:
+        logger.info(f"-> Dữ liệu VectorDB đã tồn tại ({existing_count} chunks). Bỏ qua tạo mới.")
+
+    retriever = HybridRetriever(db)
     retriever.build_bm25_index()
     return retriever
 
@@ -327,8 +298,9 @@ def build_retriever(vector_db: MedicalVectorDB) -> HybridRetriever:
 # ─────────────────────────── Main ────────────────────────────────
 if __name__ == "__main__":
     print("=== Test Hybrid Retriever ===")
-    db = build_database(force_rebuild=False)
-    retriever = build_retriever(db)
+    
+    # Chỉ cần gọi 1 hàm duy nhất, hệ thống sẽ tự động lo việc DB có cần load hay không
+    retriever = build_retriever()
 
     test_queries = [
         "What is the function of the sacrum and coccyx?",
