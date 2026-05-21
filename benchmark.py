@@ -5,6 +5,7 @@ import re
 import torch
 from transformers import pipeline
 from datasets import load_dataset 
+from tqdm.autonotebook import tqdm
 
 # --- IMPORT MODULE RETRIEVER CỦA BẠN ─--
 from retriever import build_retriever
@@ -22,19 +23,38 @@ MAX_CONTEXT_TOKENS = 2048
 # "You are a helpful and expert medical assistant. Identify the correct response employing a logical and systematic strategy."
 
 SYS_PROMPT_MEDQA_NO_RAG = (
-    "You are a helpful and expert medical assistant. Identify the correct response employing a logical and systematic strategy."
+    "You are an expert medical assistant. Please think step by step to analyze the "
+    "clinical scenario, symptoms, and potential diagnoses. Evaluate each given option "
+    "logically before making a decision. You must conclude your reasoning by providing "
+    "the final answer as exactly one letter: A, B, C, or D."
 )
 
 SYS_PROMPT_MEDQA_RAG = (
-    "You are a helpful and expert medical assistant. Identify the correct response employing a logical and systematic strategy."
+    "You are an expert medical assistant. Carefully read and use the provided context "
+    "to inform your reasoning. Think step by step to analyze the clinical question and "
+    "evaluate the given options based strictly on the retrieved medical text. You must "
+    "conclude your reasoning by providing the final answer as exactly one letter: A, B, C, or D."
 )
 
+# --- PubMedQA (Yes/No/Maybe) Prompts ---
+
 SYS_PROMPT_PUBMED_NO_RAG = (
-    "You are a helpful and expert medical assistant. Identify the correct response employing a logical and systematic strategy."
+    "You are an expert medical research assistant. Please think step by step to analyze "
+    "the research question based on general medical knowledge. You must conclude your "
+    "reasoning with a final classification of 'yes', 'no', or 'maybe'. "
+    "Output 'yes' if the medical consensus strongly supports or confirms the premise. "
+    "Output 'no' if the medical consensus contradicts or refutes the premise. "
+    "Output 'maybe' if the evidence is inconclusive, highly conditional, or yields mixed results."
 )
 
 SYS_PROMPT_PUBMED_RAG = (
-    "You are a helpful and expert medical assistant. Identify the correct response employing a logical and systematic strategy."
+    "You are an expert medical research assistant. Use the provided context to guide "
+    "your reasoning. Think step by step to evaluate the research question based on the "
+    "findings in the retrieved documents. You must conclude your reasoning with a final "
+    "classification of 'yes', 'no', or 'maybe'. "
+    "Output 'yes' if the context explicitly confirms or supports the premise. "
+    "Output 'no' if the context explicitly refutes or contradicts the premise. "
+    "Output 'maybe' if the context states the results are inconclusive, conditional, or mixed."
 )
 
 # ==========================================
@@ -140,8 +160,10 @@ def run_medqa_eval(dataset, text_generator, tokenizer, retriever_engine, use_rag
     correct = 0
     total = len(dataset)
     print(f"\n[*] Evaluating MedQA ({total} questions)...")
+
+    progressbar = tqdm(dataset, desc="MedQA benchmark progress", colour='cyan')
     
-    for idx, item in enumerate(dataset):
+    for idx, item in enumerate(progressbar):
         question = item["question"]
         options = item["options"]
         actual = item["answer_idx"] 
@@ -185,8 +207,10 @@ def run_pubmedqa_eval(dataset, text_generator, tokenizer, retriever_engine, use_
     correct = 0
     total = len(dataset)
     print(f"\n[*] Evaluating PubMedQA ({total} questions)...")
+
+    progressbar = tqdm(dataset, desc="PubMedQA benchmark progress", colour='cyan')
     
-    for idx, item in enumerate(dataset):
+    for idx, item in enumerate(progressbar):
         question = item["question"]
         actual = item["final_decision"] # yes, no, maybe
         
@@ -209,7 +233,7 @@ def run_pubmedqa_eval(dataset, text_generator, tokenizer, retriever_engine, use_
         if is_correct: 
             correct += 1
             
-        print(f"  PubMedQA Q{idx+1}/{total} | Expect: {actual} | Predict: {pred} | Correct: {is_correct}")
+        # print(f"  PubMedQA Q{idx+1}/{total} | Expect: {actual} | Predict: {pred} | Correct: {is_correct}")
         
         # Append report object to final export list
         results_list.append({
