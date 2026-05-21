@@ -7,8 +7,8 @@ from tqdm import tqdm
 
 class VectorDB:
     def __init__(self, db_path: str = "./chroma_db"):
-        self.device = "cpu"
-        print(f"Đang chạy trên thiết bị: {self.device}")
+        self.device = "gpu"
+        # print(f"Đang chạy trên thiết bị: {self.device}")
 
         self.model = SentenceTransformer("NeuML/pubmedbert-base-embeddings", device=self.device)
         self.client = chromadb.PersistentClient(path=db_path)
@@ -21,11 +21,11 @@ class VectorDB:
             }
         )
 
-    def load_dataset(self, limit: int = 100):
+    def load_dataset(self):
         # Tối ưu: Đưa biến giới hạn data ra ngoài để linh hoạt mở rộng quy mô sau này
         dataset = load_dataset(
             "MedRAG/textbooks",
-            split=f"train[:{limit}]"
+            split="train"
         )
         return dataset
 
@@ -39,8 +39,8 @@ class VectorDB:
         )
         return embeddings
 
-    def build_db(self, limit: int = 100, batch_size: int = 32):
-        dataset = self.load_dataset(limit=limit)
+    def build_db(self, batch_size: int = 32):
+        dataset = self.load_dataset()
         total = len(dataset)
 
         for i in tqdm(range(0, total, batch_size)):
@@ -68,13 +68,11 @@ class VectorDB:
             )
 
     def search(self, query, top_k=3):
-        # Chuẩn hóa vector truy vấn
         query_embeddings = self.model.encode(
             query,
             normalize_embeddings=True,
         ).tolist()
 
-        # TỐI ƯU SEARCH: Dùng `include` để chặn không load lại mảng vector ("embeddings") của tài liệu lên RAM
         results = self.collection.query(
             query_embeddings=[query_embeddings],
             n_results=top_k,

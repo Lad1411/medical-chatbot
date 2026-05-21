@@ -1,63 +1,39 @@
+from unsloth import FastLanguageModel
 import argparse
-import json
+import csv
 import re
 import torch
 from transformers import pipeline
 from datasets import load_dataset 
-from unsloth import FastLanguageModel
 
-# --- IMPORT MODULE RETRIEVER CỦA BẠN ---
-# from vector_db import build_database
-# from retriever import build_retriever
-from peft import PeftModel
+# --- IMPORT MODULE RETRIEVER CỦA BẠN ─--
+from retriever import build_retriever
 
 # ==========================================
-# 1. CONFIGURATION
+# 1. CONFIGURATION & CORE HYPERPARAMETERS
 # ==========================================
 BASE_MODEL = "unsloth/Qwen2.5-7B-Instruct-bnb-4bit"
-LORA_PATH = "./models/qwen_chatdoctor_lora_new_dataset/checkpoint-200" 
 MAX_CONTEXT_TOKENS = 2048
 
 # ==========================================
-# 2. SYSTEM PROMPTS
+# 2. SYSTEM PROMPTS (ALIGNING TO TRAINING PROMPT)
 # ==========================================
-# SYS_PROMPT_MEDQA_NO_RAG = (
-#     """
-#     You are a helpful and expert medical assistant. Identify the correct response employing a logical and systematic strategy.
-#     """
-# )
+# System prompts aligned perfectly with the fine-tuning instruction:
+# "You are a helpful and expert medical assistant. Identify the correct response employing a logical and systematic strategy."
 
-# SYS_PROMPT_MEDQA_RAG = (
-#     "You are an expert medical professional. You will be provided with reference context, "
-#     "a medical multiple-choice question, and 4 options (A, B, C, D). "
-#     "Use the provided context to determine the correct answer. "
-#     "Output ONLY the single correct option letter (A, B, C, or D). "
-#     "Do not provide any explanation or additional text."
-# )
+SYS_PROMPT_MEDQA_NO_RAG = (
+    "You are a helpful and expert medical assistant. Identify the correct response employing a logical and systematic strategy."
+)
 
-# # --- PUBMEDQA PROMPTS ---
-# SYS_PROMPT_PUBMED_NO_RAG = (
-#     """
-#     You are an expert medical researcher. You will be provided with a medical research question.
-#     First, briefly analyze the established medical consensus regarding this topic.
-#     Then, conclude your response with ONLY one of the following words wrapped in brackets: [yes], [no], or [maybe].
-#     - [yes]: medical knowledge strongly supports the premise.
-#     - [no]: medical knowledge refutes the premise.
-#     - [maybe]: evidence is inconclusive or conflicting.
-#     """
-# )
+SYS_PROMPT_MEDQA_RAG = (
+    "You are a helpful and expert medical assistant. Identify the correct response employing a logical and systematic strategy."
+)
 
-# SYS_PROMPT_PUBMED_RAG = (
-#     "You are an expert medical researcher. You will be provided with reference context and a medical research question. "
-#     "Use ONLY the provided context to answer the question with ONLY one of the following words: 'yes', 'no', or 'maybe'. "
-#     "Follow these criteria strictly:\n"
-#     "- Output 'yes' if the context explicitly supports the premise or shows a positive conclusion.\n"
-#     "- Output 'no' if the context explicitly refutes the premise or shows a negative conclusion.\n"
-#     "- Output 'maybe' if the context is inconclusive, states that more research is needed, or lacks sufficient information.\n"
-#     "Do not provide any explanation or additional text."
-# )
+SYS_PROMPT_PUBMED_NO_RAG = (
+    "You are a helpful and expert medical assistant. Identify the correct response employing a logical and systematic strategy."
+)
 
-SYS_PROMPT = (
+SYS_PROMPT_PUBMED_RAG = (
     "You are a helpful and expert medical assistant. Identify the correct response employing a logical and systematic strategy."
 )
 
@@ -65,29 +41,71 @@ SYS_PROMPT = (
 # 3. HELPER FUNCTIONS
 # ==========================================
 def parse_args():
-    parser = argparse.ArgumentParser(description="Benchmark MedQA with optional RAG")
-    parser.add_argument("--rag", action="store_true", help="Enable RAG (Hybrid Retrieval) mode")
-    # THÊM THAM SỐ LIMIT ĐỂ TEST NHANH
-    parser.add_argument("--limit", type=int, default=0, help="Limit number of questions to test (0 for all)")
+    parser = argparse.ArgumentParser(description="Benchmark MedQA & PubMedQA with optional hybrid RAG")
+    
+    # LoRA Path parameter
+    parser.add_argument(
+        "--lora-path", "--lora_path", 
+        type=str, 
+        default="./models/qwen_chatdoctor_lora_new_dataset/checkpoint-200", 
+        help="Path to the LoRA adapter checkpoints"
+    )
+    
+    # RAG flag parameter
+    parser.add_argument(
+        "--rag", "--use-rag", "--use_rag",
+        action="store_true", 
+        help="Enable RAG (Hybrid Retrieval + Reranking) mode"
+    )
+    
+    # Output file name parameter
+    parser.add_argument(
+        "--output", "--output-file", "--output_file",
+        type=str, 
+        default="benchmark_results.csv", 
+        help="Path/Name of the output CSV file to save benchmark results"
+    )
+    
+    # Question limit parameter (for fast-testing / subset eval)
+    parser.add_argument(
+        "--limit", 
+        type=int, 
+        default=0, 
+        help="Limit number of questions to test per dataset (0 for all)"
+    )
+    
     return parser.parse_args()
 
 def extract_mcq_answer(llm_output):
-    """Bắt chữ cái A, B, C, D cho MedQA."""
+    """Parses single character options (A, B, C, D) from LLM generation."""
     match = re.search(r'\b([A-D])\b', llm_output, re.IGNORECASE)
     if match:
         return match.group(1).upper()
     return None
 
 def extract_ynm_answer(llm_output):
-    """Bắt chữ yes, no, maybe cho PubMedQA."""
+    """Parses PubMedQA classification responses (yes, no, maybe) from LLM generation."""
     match = re.search(r'\b(yes|no|maybe)\b', llm_output, re.IGNORECASE)
     if match:
         return match.group(1).lower()
     return None
 
+def format_context(hits):
+    """Formats list of retrieved documents into a clean structural text block."""
+    if not hits:
+        return "No reference context found."
+        
+    formatted_docs = []
+    for i, hit in enumerate(hits):
+        title = hit.get("metadata", {}).get("title", f"Document {i+1}")
+        text = hit.get("text", "")
+        formatted_docs.append(f"[Document {i+1} - Title: {title}]\n{text}")
+        
+    return "\n\n".join(formatted_docs)
+
 def build_messages(user_prompt_text, sys_prompt_no_rag, sys_prompt_rag, tokenizer, use_rag=False, raw_context=""):
     """
-    Hàm chung để xây dựng message và cắt Token Context an toàn.
+    Constructs conversations while managing and formatting context.
     """
     sys_prompt = sys_prompt_rag if use_rag else sys_prompt_no_rag
     
@@ -97,6 +115,7 @@ def build_messages(user_prompt_text, sys_prompt_no_rag, sys_prompt_rag, tokenize
             {"role": "user", "content": user_prompt_text}
         ]
     
+    # Context token safety tracking
     sys_tokens = len(tokenizer.encode(sys_prompt))
     q_tokens = len(tokenizer.encode(user_prompt_text))
     available_context_tokens = MAX_CONTEXT_TOKENS - sys_tokens - q_tokens - 50 
@@ -117,7 +136,7 @@ def build_messages(user_prompt_text, sys_prompt_no_rag, sys_prompt_rag, tokenize
         {"role": "user", "content": user_content}
     ]
 
-def run_medqa_eval(dataset, text_generator, tokenizer, retriever_engine, use_rag):
+def run_medqa_eval(dataset, text_generator, tokenizer, retriever_engine, use_rag, results_list):
     correct = 0
     total = len(dataset)
     print(f"\n[*] Evaluating MedQA ({total} questions)...")
@@ -129,8 +148,9 @@ def run_medqa_eval(dataset, text_generator, tokenizer, retriever_engine, use_rag
         
         raw_context = ""
         if use_rag and retriever_engine is not None:
+            # Query textbook VectorDB with the clinical question
             hits = retriever_engine.retrieve(question, final_top_k=3, use_rerank=True)
-            raw_context = retriever_engine.format_context(hits)
+            raw_context = format_context(hits)
             
         options_text = "\n".join([f"{k}) {v}" for k, v in options.items()])
         user_prompt_text = f"Question: {question}\nOptions:\n{options_text}\nAnswer:"
@@ -143,13 +163,25 @@ def run_medqa_eval(dataset, text_generator, tokenizer, retriever_engine, use_rag
         pred = extract_mcq_answer(generated_text)
         
         is_correct = (pred == actual)
-        if is_correct: correct += 1
+        if is_correct: 
+            correct += 1
             
         print(f"  MedQA Q{idx+1}/{total} | Expect: {actual} | Predict: {pred} | Correct: {is_correct}")
         
+        # Append report object to final export list
+        results_list.append({
+            "Dataset": "MedQA",
+            "Index": idx + 1,
+            "Question": question,
+            "Context": raw_context if use_rag else "N/A (No RAG)",
+            "Expected": actual,
+            "Predicted": pred if pred is not None else "[Invalid Output]",
+            "IsCorrect": is_correct
+        })
+        
     return correct, total
 
-def run_pubmedqa_eval(dataset, text_generator, tokenizer, retriever_engine, use_rag):
+def run_pubmedqa_eval(dataset, text_generator, tokenizer, retriever_engine, use_rag, results_list):
     correct = 0
     total = len(dataset)
     print(f"\n[*] Evaluating PubMedQA ({total} questions)...")
@@ -160,8 +192,9 @@ def run_pubmedqa_eval(dataset, text_generator, tokenizer, retriever_engine, use_
         
         raw_context = ""
         if use_rag and retriever_engine is not None:
+            # Query textbook VectorDB with the research question
             hits = retriever_engine.retrieve(question, final_top_k=3, use_rerank=True)
-            raw_context = retriever_engine.format_context(hits)
+            raw_context = format_context(hits)
             
         user_prompt_text = f"Question: {question}\nAnswer:"
         
@@ -173,19 +206,35 @@ def run_pubmedqa_eval(dataset, text_generator, tokenizer, retriever_engine, use_
         pred = extract_ynm_answer(generated_text)
         
         is_correct = (pred == actual)
-        if is_correct: correct += 1
+        if is_correct: 
+            correct += 1
             
         print(f"  PubMedQA Q{idx+1}/{total} | Expect: {actual} | Predict: {pred} | Correct: {is_correct}")
+        
+        # Append report object to final export list
+        results_list.append({
+            "Dataset": "PubMedQA",
+            "Index": idx + 1,
+            "Question": question,
+            "Context": raw_context if use_rag else "N/A (No RAG)",
+            "Expected": actual,
+            "Predicted": pred if pred is not None else "[Invalid Output]",
+            "IsCorrect": is_correct
+        })
         
     return correct, total
 
 # ==========================================
-# 4. MAIN EXECUTION
+# 4. MAIN BENCHMARK EXECUTION
 # ==========================================
 def main():
     args = parse_args()
-    print(f"--- Running Benchmark on MedQA ---")
+    print(f"--- Running Benchmark on MedQA & PubMedQA dataset ---")
     print(f"Mode: {'Hybrid RAG + LLM' if args.rag else 'Zero-shot LLM (No RAG)'}")
+    print(f"LoRA Adapter Path: {args.lora_path}")
+    print(f"Output CSV Path: {args.output}")
+    if args.limit > 0:
+        print(f"Question Limit: {args.limit} queries per dataset")
     
     # ---------------------------------------------------------
     # KHỞI TẠO HỆ THỐNG RAG (Chỉ khởi tạo 1 lần)
@@ -193,8 +242,7 @@ def main():
     retriever_engine = None
     if args.rag:
         print("\n[+] Initializing Vector Database and Hybrid Retriever...")
-        db = build_database(force_rebuild=False)
-        retriever_engine = build_retriever(db)
+        retriever_engine = build_retriever()
         print("[+] RAG System Ready!\n")
 
     print("\n[+] Loading Base LLM (4-bit)...")
@@ -205,8 +253,8 @@ def main():
         load_in_4bit=True,
     )
     
-    print(f"[+] Applying LoRA adapters from {LORA_PATH}...")
-    model.load_adapter(LORA_PATH)
+    print(f"[+] Applying LoRA adapters from {args.lora_path}...")
+    model.load_adapter(args.lora_path)
     
     # BẬT CHẾ ĐỘ NATIVE INFERENCE CỦA UNSLOTH (Tốc độ x2, chống lỗi RAM)
     FastLanguageModel.for_inference(model)
@@ -223,13 +271,10 @@ def main():
     )
 
     # ---------------------------------------------------------
-    # LOAD DATASET TỪ HUGGING FACE
+    # LOAD DATASETS TỪ HUGGING FACE
     # ---------------------------------------------------------
-    # Load dữ liệu MedQA
-    print("\n[+] Loading Datasets...")
+    print("\n[+] Loading Medical Datasets...")
     medqa_ds = load_dataset("GBaker/MedQA-USMLE-4-options", split="test")
-    
-    # Load dữ liệu PubMedQA (Tập pqa_labeled chứa 500 câu hỏi chất lượng cao)
     pubmedqa_ds = load_dataset("pubmed_qa", "pqa_labeled", split="train") 
     
     if args.limit > 0:
@@ -237,8 +282,9 @@ def main():
         pubmedqa_ds = pubmedqa_ds.select(range(min(args.limit, len(pubmedqa_ds))))
 
     # Chạy Benchmark
-    med_correct, med_total = run_medqa_eval(medqa_ds, text_generator, tokenizer, retriever_engine, args.rag)
-    pub_correct, pub_total = run_pubmedqa_eval(pubmedqa_ds, text_generator, tokenizer, retriever_engine, args.rag)
+    results_data = [] # Stores rows for CSV output
+    med_correct, med_total = run_medqa_eval(medqa_ds, text_generator, tokenizer, retriever_engine, args.rag, results_data)
+    pub_correct, pub_total = run_pubmedqa_eval(pubmedqa_ds, text_generator, tokenizer, retriever_engine, args.rag, results_data)
     
     # In báo cáo tổng hợp
     print(f"\n{'='*50}")
@@ -253,6 +299,22 @@ def main():
     print(f"    - Correct: {pub_correct} / {pub_total}")
     print(f"    - Accuracy: {(pub_correct / pub_total * 100) if pub_total else 0:.2f}%")
     print(f"{'='*50}")
+
+    # Ghi toàn bộ kết quả vào File CSV
+    print(f"\n[+] Writing benchmark metrics to: {args.output}...")
+    try:
+        med_acc = (med_correct / med_total * 100) if med_total else 0.0
+        pub_acc = (pub_correct / pub_total * 100) if pub_total else 0.0
+        
+        with open(args.output, mode="w", newline="", encoding="utf-8") as csv_file:
+            writer = csv.writer(csv_file)
+            writer.writerow(["Dataset", "Correct", "Total", "Accuracy"])
+            writer.writerow(["MedQA (USMLE 4-options)", med_correct, med_total, f"{med_acc:.2f}%"])
+            writer.writerow(["PubMedQA (Yes/No/Maybe)", pub_correct, pub_total, f"{pub_acc:.2f}%"])
+            
+        print(f"[+] Successfully exported final results to {args.output}!")
+    except Exception as e:
+        print(f"[-] Failed to export results to CSV: {e}")
 
 if __name__ == "__main__":
     main()
