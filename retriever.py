@@ -286,7 +286,7 @@ def build_retriever() -> HybridRetriever:
     existing_count = db.collection.count()
     if existing_count == 0:
         logger.info("-> Database Chroma rỗng! Đang tiến hành tạo dữ liệu VectorDB (Chỉ chạy 1 lần)...")
-        db.build_db(limit=100, batch_size=32)
+        db.build_db(batch_size=32)
     else:
         logger.info(f"-> Dữ liệu VectorDB đã tồn tại ({existing_count} chunks). Bỏ qua tạo mới.")
 

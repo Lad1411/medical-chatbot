@@ -209,7 +209,7 @@ def run_pubmedqa_eval(dataset, text_generator, tokenizer, retriever_engine, use_
     print(f"\n[*] Evaluating PubMedQA ({total} questions)...")
 
     progressbar = tqdm(dataset, desc="PubMedQA benchmark progress", colour='cyan')
-    
+        
     for idx, item in enumerate(progressbar):
         question = item["question"]
         actual = item["final_decision"] # yes, no, maybe

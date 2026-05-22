@@ -7,7 +7,7 @@ from tqdm import tqdm
 
 class VectorDB:
     def __init__(self, db_path: str = "./chroma_db"):
-        self.device = "gpu"
+        self.device = "cuda"
         # print(f"Đang chạy trên thiết bị: {self.device}")
 
         self.model = SentenceTransformer("NeuML/pubmedbert-base-embeddings", device=self.device)
@@ -91,7 +91,7 @@ if __name__ == "__main__":
     if existing_count == 0:
         print("-> Database trống! Đang tiến hành tạo dữ liệu...")
         # Sử dụng batch_size=32 là con số tối ưu cho CPU (không quá nặng, không quá lắt nhắt)
-        db.build_db(limit=100, batch_size=32)
+        db.build_db(batch_size=32)
         print("-> Đã nạp dữ liệu xong!")
     else:
         print("-> Dữ liệu đã tồn tại sẵn trên ổ đĩa. Sẵn sàng truy vấn.")
