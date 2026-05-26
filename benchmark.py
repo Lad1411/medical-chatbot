@@ -59,36 +59,46 @@ def parse_args():
     parser.add_argument("--rag", action="store_true")
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--output", type=str, default="benchmark_results.csv")
-    return parser.parse_args()
+    return parser.parse_args([])
 
 # ==========================================
 # ANSWER EXTRACTION
 # ==========================================
-def extract_mcq_answer(text):
-    patterns = [
-        r"Final Answer:\s*([A-D])",
-        r"Answer:\s*([A-D])",
-        r"answer is\s*([A-D])",
-        r"\b([A-D])\b\s*$",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            return match.group(1).upper()
+# def extract_mcq_answer(text):
+#     patterns = [
+#         r"Final Answer:\s*([A-D])",
+#         r"Answer:\s*([A-D])",
+#         r"answer is\s*([A-D])",
+#         r"\b([A-D])\b\s*$",
+#     ]
+#     for pattern in patterns:
+#         match = re.search(pattern, text, re.IGNORECASE)
+#         if match:
+#             return match.group(1).upper()
+#     return None
+
+def extract_mcq_answer(llm_output):
+    """Parses single character options (A, B, C, D) from LLM generation."""
+    match_mcq = re.search(r"(?:Answer:|answer is|correct option is|choice is)\s*([A-D])", llm_output, re.IGNORECASE)
+    if match_mcq:
+        return match_mcq.group(1).upper()
+
+    match_mcq_end = re.search(r"\b([A-D])\b[\.\s]*(?:<\|im_end\|>)?$", llm_output, re.IGNORECASE)
+    if match_mcq_end:
+        return match_mcq_end.group(1).upper()
     return None
 
-def extract_ynm_answer(text):
-    patterns = [
-        r"Final Answer:\s*(yes|no|maybe)",
-        r"Answer:\s*(yes|no|maybe)",
-        r"answer is\s*(yes|no|maybe)",
-        r"\b(yes|no|maybe)\b\s*$",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            return match.group(1).lower()
+def extract_ynm_answer(llm_output):
+    """Parses PubMedQA classification responses (yes, no, maybe) from LLM generation."""
+    match_ynm = re.search(r"(?:Answer:|answer is|correct option is|choice is)\s*(yes|no|maybe)", llm_output, re.IGNORECASE)
+    if match_ynm:
+        return match_ynm.group(1).lower()
+
+    match_ynm = re.search(r"\b(yes|no|maybe)\b[\.\s]*(?:<\|im_end\|>)?$", llm_output, re.IGNORECASE)
+    if match_ynm:
+        return match_ynm.group(1).lower()
     return None
+
 
 # ==========================================
 # CONTEXT FORMATTER

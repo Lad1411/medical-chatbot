@@ -17,8 +17,8 @@ max_seq_length = 1536            # Maximum sequence length for training
 dtype = None                     # Auto-detect precision (fp16/bf16)
 load_in_4bit = True              # Enable 4-bit quantization (QLoRA)
 
-OUTPUT_DIR = "./models/qwen_chatdoctor_lora_new_dataset"
-MERGED_DIR = "./models/qwen_chatdoctor_merged"
+OUTPUT_DIR = "/kaggle/working/models/qwen_chatdoctor_lora_new_dataset"
+MERGED_DIR = "/kaggle/working/models/qwen_chatdoctor_merged"
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(MERGED_DIR, exist_ok=True)
@@ -139,6 +139,7 @@ def preprocess_logits_for_metrics(logits, labels):
 def compute_metrics(eval_preds):
     preds, labels = eval_preds
     labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
+    preds = np.where(preds != -100, preds, tokenizer.pad_token_id)
     
     decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=False)
     decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=False)
