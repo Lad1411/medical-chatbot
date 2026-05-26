@@ -4,3 +4,4 @@ __pycache__
 unsloth_compiled_cache
 *.csv
 *.sh
+chroma_db
