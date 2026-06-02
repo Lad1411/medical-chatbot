@@ -20,7 +20,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 # Cross-Encoder model tốt cho đa ngôn ngữ + tiếng Việt
-RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
+RERANKER_MODEL = "ncbi/MedCPT-Cross-Encoder"
 
 # Số lượng tài liệu lấy ra ban đầu trước khi rerank
 INITIAL_DENSE_TOP_K = 20
@@ -111,7 +111,6 @@ class HybridRetriever:
     def build_bm25_index(self) -> None:
         logger.info("🔨 Đang build BM25 index từ ChromaDB ...")
         
-        # [CHỈNH SỬA 3]: Xóa dấu gạch dưới _collection vì trong class VectorDB của bạn thuộc tính tên là "self.collection"
         coll = self.vector_db.collection 
 
         total = coll.count()
@@ -149,14 +148,14 @@ class HybridRetriever:
             logger.info("✅ Cross-Encoder sẵn sàng.")
         return self._reranker
 
-    @staticmethod
-    def _normalize(scores: List[float]) -> List[float]:
-        if not scores:
-            return scores
-        min_s, max_s = min(scores), max(scores)
-        if max_s == min_s:
-            return [1.0] * len(scores)
-        return [(s - min_s) / (max_s - min_s) for s in scores]
+    # @staticmethod
+    # def _normalize(scores: List[float]) -> List[float]:
+    #     if not scores:
+    #         return scores
+    #     min_s, max_s = min(scores), max(scores)
+    #     if max_s == min_s:
+    #         return [1.0] * len(scores)
+    #     return [(s - min_s) / (max_s - min_s) for s in scores]
 
     # ── Dense Search ──────────────────────────────────────────────
     def _dense_search(self, query: str, top_k: int) -> List[Dict[str, Any]]:
@@ -205,30 +204,47 @@ class HybridRetriever:
         return results
 
     # ── Hybrid Merge (RRF + weighted score) ───────────────────────
+    # ── Hybrid Merge (True RRF + weighted score) ───────────────────────
     def _hybrid_merge(
         self,
         dense_hits: List[Dict[str, Any]],
         bm25_hits:  List[Dict[str, Any]],
+        rrf_k: int = 60
     ) -> List[Dict[str, Any]]:
-        dense_scores = self._normalize([h["score"] for h in dense_hits])
-        bm25_scores  = self._normalize([h["score"] for h in bm25_hits])
-
+        """
+        Combines Dense and BM25 results using true Reciprocal Rank Fusion (RRF).
+        Formula: score = weight * (1 / (rrf_k + rank))
+        """
         merged: Dict[str, Dict[str, Any]] = {}
 
-        for hit, score in zip(dense_hits, dense_scores):
+        # 1. Process Dense Hits (List is assumed to be sorted by best score)
+        for rank, hit in enumerate(dense_hits, start=1):
             doc_id = hit["id"]
-            merged[doc_id] = {**hit, "hybrid_score": ALPHA_DENSE * score}
+            # Calculate RRF score based purely on rank position
+            rrf_score = 1.0 / (rrf_k + rank)
+            weighted_score = ALPHA_DENSE * rrf_score
+            
+            # Initialize the document in our merged dictionary
+            merged[doc_id] = {**hit, "hybrid_score": weighted_score}
 
-        for hit, score in zip(bm25_hits, bm25_scores):
+        # 2. Process BM25 Hits (List is assumed to be sorted by best score)
+        for rank, hit in enumerate(bm25_hits, start=1):
             doc_id = hit["id"]
+            rrf_score = 1.0 / (rrf_k + rank)
+            weighted_score = ALPHA_BM25 * rrf_score
+            
+            # If the document was also found by Dense search, add to its existing score
             if doc_id in merged:
-                merged[doc_id]["hybrid_score"] += ALPHA_BM25 * score
+                merged[doc_id]["hybrid_score"] += weighted_score
+            # If it's a new document found only by BM25, add it to the dictionary
             else:
-                merged[doc_id] = {**hit, "hybrid_score": ALPHA_BM25 * score}
+                merged[doc_id] = {**hit, "hybrid_score": weighted_score}
 
+        # 3. Sort final results by the combined RRF hybrid score
         sorted_hits = sorted(
             merged.values(), key=lambda x: x["hybrid_score"], reverse=True
         )
+        
         return sorted_hits
 
     # ── Rerank bằng Cross-Encoder ─────────────────────────────────

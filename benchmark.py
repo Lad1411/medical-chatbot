@@ -6,6 +6,7 @@ import torch
 from datasets import load_dataset
 from tqdm.auto import tqdm
 from transformers import logging
+from retriever import build_retriever
 
 # ==========================================
 # PERFORMANCE SETTINGS
@@ -18,8 +19,8 @@ logging.set_verbosity_error()
 # ==========================================
 BASE_MODEL = "unsloth/Qwen2.5-7B-Instruct-bnb-4bit"
 MAX_CONTEXT_TOKENS = 1536
-MAX_NEW_TOKENS = 256
-BATCH_SIZE = 4
+MAX_NEW_TOKENS = 512
+BATCH_SIZE = 16
 
 # ==========================================
 # OPTIONAL RAG IMPORT
@@ -55,11 +56,11 @@ SYS_PROMPT_PUBMED_RAG = (
 # ==========================================
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--lora-path", type=str, default="./models/checkpoint-1600")
+    parser.add_argument("--lora-path", type=str, default="./models/checkpoint-3400")
     parser.add_argument("--rag", action="store_true")
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--output", type=str, default="benchmark_results.csv")
-    return parser.parse_args([])
+    return parser.parse_args()
 
 # ==========================================
 # ANSWER EXTRACTION
@@ -208,6 +209,7 @@ def run_medqa_eval(dataset, model, tokenizer, retriever_engine, use_rag, results
             # print(messages)
             prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
+            # print("="*50)
             # print(prompt)
 
             # exit()
@@ -221,7 +223,7 @@ def run_medqa_eval(dataset, model, tokenizer, retriever_engine, use_rag, results
 
         for i, generated_text in enumerate(generated_outputs):
             pred = extract_mcq_answer(generated_text)
-            is_correct = (pred == actual_answers[i].lower())
+            is_correct = (str(pred).upper() == str(actual_answers[i]).upper())
             
             if is_correct:
                 correct += 1
@@ -235,6 +237,12 @@ def run_medqa_eval(dataset, model, tokenizer, retriever_engine, use_rag, results
                 "Predicted": pred if pred else "[Invalid]",
                 "IsCorrect": is_correct
             })
+
+
+            # ("="*50)
+            # prinprintt(generated_text)
+
+        # exit()
 
         current_batch_len = len(batch["question"])
         progressbar.update(current_batch_len)
@@ -268,6 +276,8 @@ def run_pubmedqa_eval(dataset, model, tokenizer, retriever_engine, use_rag, resu
             messages = build_messages(user_prompt_text, SYS_PROMPT_PUBMED_NO_RAG, SYS_PROMPT_PUBMED_RAG, tokenizer, use_rag, raw_context)
             prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
             # print(prompt)
+            # print("="*50)
+            # print(prompt)
             # exit()
 
             prompts.append(prompt)
@@ -294,6 +304,10 @@ def run_pubmedqa_eval(dataset, model, tokenizer, retriever_engine, use_rag, resu
                 "IsCorrect": is_correct
             })
 
+            # ("="*50)
+            # print(gprintenerated_text)
+
+        # exit()
         current_batch_len = len(batch["question"])
         progressbar.update(current_batch_len)
     progressbar.close()
@@ -342,15 +356,21 @@ def main():
     results_data = []
     
     med_correct, med_total = run_medqa_eval(medqa_ds, model, tokenizer, retriever_engine, args.rag, results_data)
-    pub_correct, pub_total = run_pubmedqa_eval(pubmedqa_ds, model, tokenizer, retriever_engine, args.rag, results_data)
-
     med_acc = (med_correct / med_total * 100) if med_total > 0 else 0
-    pub_acc = (pub_correct / pub_total * 100) if pub_total > 0 else 0
 
     print("\n" + "=" * 60)
     print("FINAL RESULTS")
     print("=" * 60)
     print(f"MedQA Accuracy: {med_acc:.2f}%")
+    print("=" * 60)
+
+    pub_correct, pub_total = run_pubmedqa_eval(pubmedqa_ds, model, tokenizer, retriever_engine, args.rag, results_data)
+
+    pub_acc = (pub_correct / pub_total * 100) if pub_total > 0 else 0
+
+    print("\n" + "=" * 60)
+    print("FINAL RESULTS")
+    print("=" * 60)
     print(f"PubMedQA Accuracy: {pub_acc:.2f}%")
     print("=" * 60)
 
@@ -359,7 +379,7 @@ def main():
         writer = csv.writer(csv_file)
         writer.writerow(["Dataset", "Correct", "Total", "Accuracy"])
         writer.writerow(["MedQA", med_correct, med_total, f"{med_acc:.2f}%"])
-        writer.writerow(["PubMedQA", pub_correct, pub_total, f"{pub_acc:.2f}%"])
+        # writer.writerow(["PubMedQA", pub_correct, pub_total, f"{pub_acc:.2f}%"])
 
     print("[+] Done.")
 
