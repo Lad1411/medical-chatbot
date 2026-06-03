@@ -79,49 +79,35 @@ def parse_args():
 #     return None
 
 def extract_mcq_answer(llm_output):
-    """Parses single character options (A, B, C, D) from LLM generation."""
     match_mcq = re.search(r"(?:Answer:|answer is|correct option is|choice is)\s*([A-D])", llm_output, re.IGNORECASE)
     if match_mcq:
         return match_mcq.group(1).upper()
-
     match_mcq_end = re.search(r"\b([A-D])\b[\.\s]*(?:<\|im_end\|>)?$", llm_output, re.IGNORECASE)
     if match_mcq_end:
         return match_mcq_end.group(1).upper()
     return None
 
 def extract_ynm_answer(llm_output):
-    """Parses PubMedQA classification responses (yes, no, maybe) from LLM generation."""
     match_ynm = re.search(r"(?:Answer:|answer is|correct option is|choice is)\s*(yes|no|maybe)", llm_output, re.IGNORECASE)
     if match_ynm:
         return match_ynm.group(1).lower()
-
     match_ynm = re.search(r"\b(yes|no|maybe)\b[\.\s]*(?:<\|im_end\|>)?$", llm_output, re.IGNORECASE)
     if match_ynm:
         return match_ynm.group(1).lower()
     return None
 
-
-# ==========================================
-# CONTEXT FORMATTER
-# ==========================================
 def format_context(hits):
     if not hits:
         return "No reference context found."
-    
     docs = []
     for i, hit in enumerate(hits):
         title = hit.get("metadata", {}).get("title", f"Document {i+1}")
         text = hit.get("text", "")
         docs.append(f"[Document {i+1} - {title}]\n{text}")
-        
     return "\n\n".join(docs)
 
-# ==========================================
-# BUILD MESSAGES
-# ==========================================
 def build_messages(user_prompt_text, sys_prompt_no_rag, sys_prompt_rag, tokenizer, use_rag=False, raw_context=""):
     sys_prompt = sys_prompt_rag if use_rag else sys_prompt_no_rag
-
     if not use_rag or not raw_context:
         return [
             {"role": "system", "content": sys_prompt},
@@ -140,7 +126,6 @@ def build_messages(user_prompt_text, sys_prompt_no_rag, sys_prompt_rag, tokenize
             truncated_context = tokenizer.decode(context_tokens[:available_context_tokens])
         else:
             truncated_context = raw_context
-            
         user_content = f"Context:\n{truncated_context}\n\n{user_prompt_text}"
 
     return [
@@ -148,9 +133,6 @@ def build_messages(user_prompt_text, sys_prompt_no_rag, sys_prompt_rag, tokenize
         {"role": "user", "content": user_content}
     ]
 
-# ==========================================
-# BATCH GENERATION
-# ==========================================
 def generate_batch(model, tokenizer, prompts):
     inputs = tokenizer(
         prompts,
@@ -174,10 +156,8 @@ def generate_batch(model, tokenizer, prompts):
             pad_token_id=tokenizer.eos_token_id,
         )
 
-    # Slice out only the new tokens generated
     generated_tokens = outputs[:, input_length:] 
     decoded = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
-    
     return [text.strip() for text in decoded]
 
 # ==========================================
@@ -190,69 +170,62 @@ def run_medqa_eval(dataset, model, tokenizer, retriever_engine, use_rag, results
     progressbar = tqdm(total=total, desc="MedQA", colour="cyan")
 
     for start_idx in range(0, total, BATCH_SIZE):
-        batch = dataset[start_idx:start_idx + BATCH_SIZE]
-        prompts, actual_answers, questions, contexts = [], [], [], []
+        try: 
+            batch = dataset[start_idx:start_idx + BATCH_SIZE]
+            prompts, actual_answers, questions, contexts = [], [], [], []
 
+            for question, options, actual in zip(batch["question"], batch["options"], batch["answer_idx"]):
+                raw_context = ""
+                options_text = "\n".join([f"{k}) {v}" for k, v in options.items()])
 
-        for question, options, actual in zip(batch["question"], batch["options"], batch["answer_idx"]):
-            raw_context = ""
+                if use_rag and retriever_engine is not None:
+                    retrieval_query = (
+                        f"Question: {question}\n"
+                        f"Options:\n{options_text}"
+                    )
+                    hits = retriever_engine.retrieve(retrieval_query, final_top_k=3, use_rerank=True)
+                    raw_context = format_context(hits)
 
-            if use_rag and retriever_engine is not None:
-                hits = retriever_engine.retrieve(question, final_top_k=3, use_rerank=True)
-                raw_context = format_context(hits)
+                user_prompt_text = f"Question: {question}\nOptions:\n{options_text}\nAnswer:"
 
-            options_text = "\n".join([f"{k}) {v}" for k, v in options.items()])
-            user_prompt_text = f"Question: {question}\nOptions:\n{options_text}\nAnswer:"
+                messages = build_messages(user_prompt_text, SYS_PROMPT_MEDQA_NO_RAG, SYS_PROMPT_MEDQA_RAG, tokenizer, use_rag, raw_context)
+                prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
-            messages = build_messages(user_prompt_text, SYS_PROMPT_MEDQA_NO_RAG, SYS_PROMPT_MEDQA_RAG, tokenizer, use_rag, raw_context)
+                prompts.append(prompt)
+                actual_answers.append(actual)
+                questions.append(question)
+                contexts.append(raw_context)
 
-            # print(messages)
-            prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            generated_outputs = generate_batch(model, tokenizer, prompts)
 
-            # print("="*50)
-            # print(prompt)
+            for i, generated_text in enumerate(generated_outputs):
+                pred = extract_mcq_answer(generated_text)
+                is_correct = (str(pred).upper() == str(actual_answers[i]).upper())
+                
+                if is_correct: correct += 1
 
-            # exit()
+                results_list.append({
+                    "Dataset": "MedQA",
+                    "Index": start_idx + i + 1,
+                    "Question": questions[i],
+                    "Context": contexts[i] if use_rag else "N/A",
+                    "Expected": actual_answers[i],
+                    "Predicted": pred if pred else "[Invalid]",
+                    "IsCorrect": is_correct
+                })
 
-            prompts.append(prompt)
-            actual_answers.append(actual)
-            questions.append(question)
-            contexts.append(raw_context)
-
-        generated_outputs = generate_batch(model, tokenizer, prompts)
-
-        for i, generated_text in enumerate(generated_outputs):
-            pred = extract_mcq_answer(generated_text)
-            is_correct = (str(pred).upper() == str(actual_answers[i]).upper())
-            
-            if is_correct:
-                correct += 1
-
-            results_list.append({
-                "Dataset": "MedQA",
-                "Index": start_idx + i + 1,
-                "Question": questions[i],
-                "Context": contexts[i] if use_rag else "N/A",
-                "Expected": actual_answers[i],
-                "Predicted": pred if pred else "[Invalid]",
-                "IsCorrect": is_correct
-            })
-
-
-            # ("="*50)
-            # prinprintt(generated_text)
-
-        # exit()
-
-        current_batch_len = len(batch["question"])
-        progressbar.update(current_batch_len)
-    progressbar.close()
+            progressbar.update(len(batch["question"]))
+        
+        except Exception as e:
+            print(f"Skipping failed item due to error: {e}")
+            if 'batch' in locals():
+                progressbar.update(len(batch["question"]))
+            continue
     
+    progressbar.close()
     return correct, total
 
-# ==========================================
-# PUBMEDQA EVALUATION
-# ==========================================
+
 def run_pubmedqa_eval(dataset, model, tokenizer, retriever_engine, use_rag, results_list):
     correct = 0
     total = len(dataset)
@@ -260,58 +233,52 @@ def run_pubmedqa_eval(dataset, model, tokenizer, retriever_engine, use_rag, resu
     progressbar = tqdm(total=total, desc="PubMedQA", colour="green")
 
     for start_idx in range(0, total, BATCH_SIZE):
-        batch = dataset[start_idx:start_idx + BATCH_SIZE]
-        prompts, actual_answers, questions, contexts = [], [], [], []
+        try: 
+            batch = dataset[start_idx:start_idx + BATCH_SIZE]
+            prompts, actual_answers, questions, contexts = [], [], [], []
 
-        # print(batch)
+            for question, actual in zip(batch["question"], batch["final_decision"]):
+                raw_context = ""
+                if use_rag and retriever_engine is not None:
+                    hits = retriever_engine.retrieve(question, final_top_k=3, use_rerank=True)
+                    raw_context = format_context(hits)
 
-        for question, actual in zip(batch["question"], batch["final_decision"]):
-            raw_context = ""
+                user_prompt_text = f"Question: {question}\nAnswer:"
+                messages = build_messages(user_prompt_text, SYS_PROMPT_PUBMED_NO_RAG, SYS_PROMPT_PUBMED_RAG, tokenizer, use_rag, raw_context)
+                prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
-            if use_rag and retriever_engine is not None:
-                hits = retriever_engine.retrieve(question, final_top_k=3, use_rerank=True)
-                raw_context = format_context(hits)
+                prompts.append(prompt)
+                actual_answers.append(actual)
+                questions.append(question)
+                contexts.append(raw_context)
 
-            user_prompt_text = f"Question: {question}\nAnswer:"
-            messages = build_messages(user_prompt_text, SYS_PROMPT_PUBMED_NO_RAG, SYS_PROMPT_PUBMED_RAG, tokenizer, use_rag, raw_context)
-            prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-            # print(prompt)
-            # print("="*50)
-            # print(prompt)
-            # exit()
+            generated_outputs = generate_batch(model, tokenizer, prompts)
 
-            prompts.append(prompt)
-            actual_answers.append(actual)
-            questions.append(question)
-            contexts.append(raw_context)
+            for i, generated_text in enumerate(generated_outputs):
+                pred = extract_ynm_answer(generated_text)
+                is_correct = (pred == actual_answers[i])
+                
+                if is_correct: correct += 1
 
-        generated_outputs = generate_batch(model, tokenizer, prompts)
+                results_list.append({
+                    "Dataset": "PubMedQA",
+                    "Index": start_idx + i + 1,
+                    "Question": questions[i],
+                    "Context": contexts[i] if use_rag else "N/A",
+                    "Expected": actual_answers[i],
+                    "Predicted": pred if pred else "[Invalid]",
+                    "IsCorrect": is_correct
+                })
 
-        for i, generated_text in enumerate(generated_outputs):
-            pred = extract_ynm_answer(generated_text)
-            is_correct = (pred == actual_answers[i])
-            
-            if is_correct:
-                correct += 1
+            progressbar.update(len(batch["question"]))
 
-            results_list.append({
-                "Dataset": "PubMedQA",
-                "Index": start_idx + i + 1,
-                "Question": questions[i],
-                "Context": contexts[i] if use_rag else "N/A",
-                "Expected": actual_answers[i],
-                "Predicted": pred if pred else "[Invalid]",
-                "IsCorrect": is_correct
-            })
+        except Exception as e:
+            print(f"Skipping failed item due to error: {e}")
+            if 'batch' in locals():
+                progressbar.update(len(batch["question"]))
+            continue
 
-            # ("="*50)
-            # print(gprintenerated_text)
-
-        # exit()
-        current_batch_len = len(batch["question"])
-        progressbar.update(current_batch_len)
     progressbar.close()
-    
     return correct, total
 
 # ==========================================
@@ -354,7 +321,16 @@ def main():
         pubmedqa_ds = pubmedqa_ds.select(range(min(args.limit, len(pubmedqa_ds))))
 
     results_data = []
-    
+
+    pub_correct, pub_total = run_pubmedqa_eval(pubmedqa_ds, model, tokenizer, retriever_engine, args.rag, results_data)
+    pub_acc = (pub_correct / pub_total * 100) if pub_total > 0 else 0
+
+    print("\n" + "=" * 60)
+    print("FINAL RESULTS")
+    print("=" * 60)
+    print(f"PubMedQA Accuracy: {pub_acc:.2f}%")
+    print("=" * 60)
+
     med_correct, med_total = run_medqa_eval(medqa_ds, model, tokenizer, retriever_engine, args.rag, results_data)
     med_acc = (med_correct / med_total * 100) if med_total > 0 else 0
 
@@ -364,22 +340,12 @@ def main():
     print(f"MedQA Accuracy: {med_acc:.2f}%")
     print("=" * 60)
 
-    pub_correct, pub_total = run_pubmedqa_eval(pubmedqa_ds, model, tokenizer, retriever_engine, args.rag, results_data)
-
-    pub_acc = (pub_correct / pub_total * 100) if pub_total > 0 else 0
-
-    print("\n" + "=" * 60)
-    print("FINAL RESULTS")
-    print("=" * 60)
-    print(f"PubMedQA Accuracy: {pub_acc:.2f}%")
-    print("=" * 60)
-
-    print(f"\n[+] Writing results to {args.output}")
-    with open(args.output, mode="w", newline="", encoding="utf-8") as csv_file:
-        writer = csv.writer(csv_file)
-        writer.writerow(["Dataset", "Correct", "Total", "Accuracy"])
-        writer.writerow(["MedQA", med_correct, med_total, f"{med_acc:.2f}%"])
-        # writer.writerow(["PubMedQA", pub_correct, pub_total, f"{pub_acc:.2f}%"])
+    # print(f"\n[+] Writing results to {args.output}")
+    # with open(args.output, mode="w", newline="", encoding="utf-8") as csv_file:
+    #     writer = csv.writer(csv_file)
+    #     writer.writerow(["Dataset", "Correct", "Total", "Accuracy"])
+    #     # writer.writerow(["MedQA", med_correct, med_total, f"{med_acc:.2f}%"])
+    #     # writer.writerow(["PubMedQA", pub_correct, pub_total, f"{pub_acc:.2f}%"])
 
     print("[+] Done.")
 

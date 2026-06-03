@@ -4,10 +4,11 @@ import chromadb
 from datasets import load_dataset
 from tqdm import tqdm
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+import torch
 
 class VectorDB:
     def __init__(self, db_path: str = "./chroma_db"):
-        self.device = "cuda" # Đổi thành "cpu" nếu chạy trên máy không có GPU
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
         
         self.model = SentenceTransformer("NeuML/pubmedbert-base-embeddings", device=self.device)
         self.client = chromadb.PersistentClient(path=db_path)
@@ -20,20 +21,16 @@ class VectorDB:
             }
         )
         
-        # Cấu hình Chunking: Rất quan trọng để mô hình không bị cắt cụt (truncate)
-        # PubMedBERT max length là ~512 tokens. 1500 characters ~ 300-400 từ/tokens.
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1500,  
-            chunk_overlap=200, # Giữ lại ngữ cảnh giữa 2 đoạn cắt
+            chunk_overlap=200, 
             separators=["\n\n", "\n", ".", " ", ""]
         )
 
     def process_dataset(self, repo_id: str, max_samples: int = None):
-        """Tải, cắt chunk và chuẩn hóa dữ liệu từ bất kỳ dataset HuggingFace nào"""
         print(f"-> Đang tải {repo_id}...")
         dataset = load_dataset(repo_id, split="train", streaming=True)
         
-        # Giới hạn số lượng nạp vào (Rất hữu ích khi test vì PubMed cực kỳ lớn)
         if max_samples:
             dataset = dataset.take(max_samples)
 
@@ -47,7 +44,7 @@ class VectorDB:
             
             for i, chunk in enumerate(chunks):
                 chunks_data.append({
-                    "id": f"{doc_id}_chunk_{i}",
+                    "id": f"{repo_id}_{doc_id}_chunk_{i}",
                     "text": chunk,
                     "metadata": {
                         "title": title,
@@ -60,19 +57,12 @@ class VectorDB:
 
     def build_db(self, batch_size: int = 32):
         all_chunks = []
-        
-        # 1. Tải và xử lý Textbooks
-        # (Xóa bỏ max_samples=1000 nếu bạn muốn load toàn bộ data)
         all_chunks.extend(self.process_dataset("MedRAG/textbooks"))
-        
-        # 2. Tải và xử lý PubMed
-        # (PubMed có hàng triệu bài, hãy giới hạn khi test ban đầu)
-        all_chunks.extend(self.process_dataset("MedRAG/pubmed"))
+        all_chunks.extend(self.process_dataset("MedRAG/pubmed", max_samples = 100000))
         
         total_chunks = len(all_chunks)
         print(f"\n=> Tổng số chunks cần embedding: {total_chunks}")
 
-        # 3. Chạy batch embedding và lưu vào ChromaDB
         for i in tqdm(range(0, total_chunks, batch_size), desc="Đang Embedding & Upsert"):
             batch = all_chunks[i : i + batch_size]
             
@@ -107,4 +97,3 @@ class VectorDB:
             include=["documents", "metadatas", "distances"]
         )
         return results
-
