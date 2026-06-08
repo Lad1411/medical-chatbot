@@ -20,9 +20,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 RERANKER_MODEL = "ncbi/MedCPT-Cross-Encoder"
-INITIAL_DENSE_TOP_K = 10
-INITIAL_BM25_TOP_K  = 10
-FINAL_TOP_K = 5
+INITIAL_DENSE_TOP_K = 20
+INITIAL_BM25_TOP_K  = 20
+FINAL_TOP_K = 3
 ALPHA_DENSE = 0.6
 ALPHA_BM25  = 0.4
 
@@ -93,8 +93,7 @@ class HybridRetriever:
         self._reranker: Optional[CrossEncoder] = None
         self._reranker_model = reranker_model
 
-        self.RRF_THRESHOLD = 0.012
-        self.CE_THRESHOLD = 2.0
+        self.RRF_THRESHOLD = 0.001
 
     def build_bm25_index(self) -> None:
         logger.info("🔨 Đang build BM25 index từ ChromaDB ...")
@@ -198,42 +197,35 @@ class HybridRetriever:
         query: str,
         candidates: List[Dict[str, Any]],
         top_k: int = FINAL_TOP_K,
-        ) -> List[Dict[str, Any]]:
-        
+    ) -> List[Dict[str, Any]]:
+
         if not candidates:
             return []
-        
+
         reranker = self._get_reranker()
-        
+
         pairs = [(query, c["text"]) for c in candidates]
-        
+
         ce_scores = reranker.predict(
             pairs,
             show_progress_bar=False
         )
-        
+
         for candidate, ce_score in zip(candidates, ce_scores):
             candidate["rerank_score"] = float(ce_score)
-        
+
         reranked = sorted(
             candidates,
             key=lambda x: x["rerank_score"],
             reverse=True
         )
-        
-        # Filter by CE threshold
-        filtered = [
-            doc
-            for doc in reranked
-            if doc["rerank_score"] >= self.CE_THRESHOLD
-        ]
-        
+
         logger.info(
-            f"Rerank kept {len(filtered)}/{len(reranked)} docs "
-            f"(threshold={self.CE_THRESHOLD})"
+            "Top rerank scores: %s",
+            [round(doc["rerank_score"], 4) for doc in reranked[:5]]
         )
-        
-        return filtered[:top_k]
+
+        return reranked[:top_k]
         
     def retrieve(self, query: str, final_top_k: int = FINAL_TOP_K, use_rerank: bool = True) -> List[Dict[str, Any]]:
         logger.info(f"🔍 Hybrid Retrieval cho query: '{query[:80]}...'")

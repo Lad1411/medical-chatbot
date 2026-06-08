@@ -18,7 +18,7 @@ logging.set_verbosity_error()
 # CONFIGURATION
 # ==========================================
 BASE_MODEL = "unsloth/Qwen2.5-7B-Instruct-bnb-4bit"
-MAX_CONTEXT_TOKENS = 1536
+MAX_CONTEXT_TOKENS = 2048
 MAX_NEW_TOKENS = 512
 BATCH_SIZE = 16
 
@@ -31,13 +31,14 @@ BATCH_SIZE = 16
 # SYSTEM PROMPTS
 # ==========================================
 SYS_PROMPT_MEDQA_NO_RAG = (
-    "You are a helpful and expert medical assistant. Identify the correct response employing a logical and systematic strategy. "
-    "Evaluate each option logically and conclude your reasoning with a final answer as exactly one letter: A, B, C, or D."
+    "You are an expert medical AI assistant. Your task is to answer the user's question. "
+    "Formulate a detailed explanation, and conclude with a final decision of A, B, C, or D."
 )
 
 SYS_PROMPT_MEDQA_RAG = (
-    "You are a helpful and expert medical assistant. Identify the correct response employing a logical and systematic strategy. "
-    "Carefully use the provided medical context to inform your step-by-step reasoning. Conclude your reasoning with a final answer as exactly one letter: A, B, C, or D."
+    "You are an expert medical AI assistant. You will be provided with medical abstracts as context. "
+    "Your task is to carefully read the context and use it to answer the user's question. "
+    "Formulate a detailed explanation based on the context, and conclude with a final decision of A, B, C, or D."
 )
 
 # --- PubMedQA (Yes/No/Maybe) Prompts ---
@@ -56,7 +57,7 @@ SYS_PROMPT_PUBMED_RAG = (
 # ==========================================
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--lora-path", type=str, default="./models/checkpoint-3400")
+    parser.add_argument("--lora-path", type=str, default="")
     parser.add_argument("--rag", action="store_true")
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--output", type=str, default="benchmark_results.csv")
@@ -79,7 +80,7 @@ def parse_args():
 #     return None
 
 def extract_mcq_answer(llm_output):
-    match_mcq = re.search(r"(?:Answer:|answer is|correct option is|choice is)\s*([A-D])", llm_output, re.IGNORECASE)
+    match_mcq = re.search(r"(?:Answer:|answer is|correct option is|choice is|Conclusion:)\s*([A-D])", llm_output, re.IGNORECASE)
     if match_mcq:
         return match_mcq.group(1).upper()
     match_mcq_end = re.search(r"\b([A-D])\b[\.\s]*(?:<\|im_end\|>)?$", llm_output, re.IGNORECASE)
@@ -186,7 +187,7 @@ def run_medqa_eval(dataset, model, tokenizer, retriever_engine, use_rag, results
                     hits = retriever_engine.retrieve(retrieval_query, final_top_k=3, use_rerank=True)
                     raw_context = format_context(hits)
 
-                user_prompt_text = f"Question: {question}\nOptions:\n{options_text}\nAnswer:"
+                user_prompt_text = f"Question:\n{question}\n\nOptions:\n{options_text}"
 
                 messages = build_messages(user_prompt_text, SYS_PROMPT_MEDQA_NO_RAG, SYS_PROMPT_MEDQA_RAG, tokenizer, use_rag, raw_context)
                 prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
@@ -305,31 +306,34 @@ def main():
         load_in_4bit=True,
     )
     tokenizer.padding_side = "left"
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
 
-    print(f"[+] Loading LoRA: {args.lora_path}")
-    model.load_adapter(args.lora_path)
+    if args.lora_path and args.lora_path.lower() != "none" and args.lora_path.strip() != "":
+        print(f"[+] Loading LoRA: {args.lora_path}")
+        model.load_adapter(args.lora_path)
+    else:
+        print("[+] Running without LoRA (base model only).")
     FastLanguageModel.for_inference(model)
     model.eval()
     print("[+] Model ready.")
 
     print("\n[+] Loading datasets...")
     medqa_ds = load_dataset("GBaker/MedQA-USMLE-4-options", split="test")
-    pubmedqa_ds = load_dataset("pubmed_qa", "pqa_labeled", split="train")
 
     if args.limit > 0:
         medqa_ds = medqa_ds.select(range(min(args.limit, len(medqa_ds))))
-        pubmedqa_ds = pubmedqa_ds.select(range(min(args.limit, len(pubmedqa_ds))))
 
     results_data = []
 
-    pub_correct, pub_total = run_pubmedqa_eval(pubmedqa_ds, model, tokenizer, retriever_engine, args.rag, results_data)
-    pub_acc = (pub_correct / pub_total * 100) if pub_total > 0 else 0
+    # pub_correct, pub_total = run_pubmedqa_eval(pubmedqa_ds, model, tokenizer, retriever_engine, args.rag, results_data)
+    # pub_acc = (pub_correct / pub_total * 100) if pub_total > 0 else 0
 
-    print("\n" + "=" * 60)
-    print("FINAL RESULTS")
-    print("=" * 60)
-    print(f"PubMedQA Accuracy: {pub_acc:.2f}%")
-    print("=" * 60)
+    # print("\n" + "=" * 60)
+    # print("FINAL RESULTS")
+    # print("=" * 60)
+    # print(f"PubMedQA Accuracy: {pub_acc:.2f}%")
+    # print("=" * 60)
 
     med_correct, med_total = run_medqa_eval(medqa_ds, model, tokenizer, retriever_engine, args.rag, results_data)
     med_acc = (med_correct / med_total * 100) if med_total > 0 else 0
@@ -340,12 +344,11 @@ def main():
     print(f"MedQA Accuracy: {med_acc:.2f}%")
     print("=" * 60)
 
-    # print(f"\n[+] Writing results to {args.output}")
-    # with open(args.output, mode="w", newline="", encoding="utf-8") as csv_file:
-    #     writer = csv.writer(csv_file)
-    #     writer.writerow(["Dataset", "Correct", "Total", "Accuracy"])
-    #     # writer.writerow(["MedQA", med_correct, med_total, f"{med_acc:.2f}%"])
-    #     # writer.writerow(["PubMedQA", pub_correct, pub_total, f"{pub_acc:.2f}%"])
+    print(f"\n[+] Writing results to {args.output}")
+    with open(args.output, mode="w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow(["Dataset", "Correct", "Total", "Accuracy"])
+        writer.writerow(["MedQA", med_correct, med_total, f"{med_acc:.2f}%"])
 
     print("[+] Done.")
 
