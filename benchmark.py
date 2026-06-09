@@ -96,7 +96,7 @@ PHASES = [
 def parse_args():
     parser = argparse.ArgumentParser(description="RAG Medical Benchmark Suite (MedQA, Phases 4-6)")
     parser.add_argument(
-        "--cot200-lora", type=str, default="",
+        "--cot200-lora", type=str, default="/home/lad/AI/vietnamese-medical-chatbot/models/checkpoint_200_CoT",
         help="Path to CoT-200 LoRA adapter (required for Phases 4-6)"
     )
     parser.add_argument(
