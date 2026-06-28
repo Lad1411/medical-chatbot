@@ -1,0 +1,28 @@
+==================================================
+HƯỚNG DẪN CÀI ĐẶT VÀ THIẾT LẬP MÔI TRƯỜNG
+==================================================
+
+1. Yêu cầu hệ thống:
+- Hệ điều hành: Windows/Linux/macOS
+- Python >= 3.10
+- Khuyến nghị có GPU (NVIDIA, tối thiểu 8GB VRAM) để chạy LLM tốc độ cao.
+
+2. Cài đặt các gói phần mềm (Dependencies):
+- Mở Terminal/Command Prompt tại thư mục source code gốc (chứa file requirements.txt).
+- Khuyến nghị tạo một môi trường ảo (virtual environment) trước khi cài đặt:
+  python -m venv venv
+  venv\Scripts\activate  (trên Windows)
+  source venv/bin/activate (trên Linux/macOS)
+- Cài đặt thư viện:
+  pip install -r requirements.txt
+
+3. Tải Model LLM & Embedding:
+- Nhóm sử dụng mô hình Qwen-7B được tinh chỉnh (QLoRA).
+- Cấu hình đường dẫn model bằng biến môi trường (Ví dụ trên Windows PowerShell):
+  $env:MODEL_PATH="đường_dẫn_tới_thư_mục_model_của_bạn"
+
+4. Khởi chạy ứng dụng Web (FastAPI + Giao diện UI):
+- Chạy lệnh sau để bật Web Server:
+  python -m src.proposed.app
+  (Hoặc dùng uvicorn: uvicorn src.proposed.app:app --host 0.0.0.0 --port 8000)
+- Mở trình duyệt và truy cập: http://localhost:8000 để dùng thử Chatbot.
