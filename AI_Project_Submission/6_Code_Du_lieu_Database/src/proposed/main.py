@@ -16,7 +16,7 @@ from unsloth import FastLanguageModel
 # ==========================================
 # CONFIGURATION (edit defaults as needed)
 # ==========================================
-DEFAULT_MODEL_PATH = "/kaggle/working/models/qwen_chatdoctor_lora_new_dataset"
+DEFAULT_MODEL_PATH = "models/checkpoint_200_CoT"
 BASE_MODEL_NAME = "unsloth/Qwen2.5-7B-Instruct-bnb-4bit"
 MAX_SEQ_LENGTH = 1536
 MAX_NEW_TOKENS = 512

@@ -11,6 +11,7 @@ chromadb
 datasets
 sentence-transformers
 numpy
+pandas
 langchain-text-splitters
 bitsandbytes
 tqdm

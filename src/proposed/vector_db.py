@@ -97,8 +97,8 @@ class VectorDB:
     def build_db(
         self,
         batch_size: int = 512,
-        pubmed_max_samples: int = None,
-        textbooks_max_samples: int = None,
+        pubmed_max_samples: int = 5,
+        textbooks_max_samples: int = 5,
     ):
         print("🔨 Bắt đầu build VectorDB (Textbooks + PubMed)...")
         # Textbooks dataset is smaller, but we stream-upsert it as well for consistency

@@ -118,9 +118,9 @@ async def lifespan(app: FastAPI):
                 import chromadb
                 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-                self.device = "cpu"
+                self.device = "cuda"
                 self.model = SentenceTransformer(
-                    "NeuML/pubmedbert-base-embeddings", device="cpu"
+                    "NeuML/pubmedbert-base-embeddings", device="cuda"
                 )
                 self.client = chromadb.PersistentClient(path=db_path)
                 self.collection = self.client.get_or_create_collection(
