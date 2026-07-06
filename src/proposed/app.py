@@ -35,9 +35,9 @@ from pydantic import BaseModel
 
 # ───────────────────────────── Config ──────────────────────────────────────
 MODEL_PATH = os.environ.get(
-    "MODEL_PATH", "/kaggle/working/models/qwen_chatdoctor_lora_new_dataset"
+    "MODEL_PATH", "models/checkpoint_200_CoT"
 )
-USE_MERGED = os.environ.get("USE_MERGED", "1") == "1"  # default: merged model
+USE_MERGED = os.environ.get("USE_MERGED", "0") == "1"  # default: LoRA adapters
 DISABLE_RAG = os.environ.get("NO_RAG", "0") == "1"
 MAX_SEQ_LEN = 1536
 MAX_NEW_TOKENS = 512

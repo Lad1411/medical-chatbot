@@ -21,7 +21,7 @@ An AI-powered medical question-answering system built on **Qwen 2.5-7B** fine-tu
 vietnamese-medical-chatbot/
 ├── README.md
 ├── requirements.txt
-├── docs/                      # Documentation, LaTeX report, and defense slides
+├── AI_Project_Submission/     # Documentation, LaTeX report, and defense slides
 ├── static/
 │   └── index.html             # Web Chat UI
 └── src/
@@ -47,12 +47,27 @@ vietnamese-medical-chatbot/
 
 ### 1. Prerequisites
 
-Create a new Conda environment and install dependencies:
+Create a new Python virtual environment and install dependencies:
 
+**Linux / macOS:**
 ```bash
-# Activate your conda environment
-conda create -n medical_chatbot python=3.10 -y
-conda activate medical_chatbot
+# Create a virtual environment
+python3 -m venv venv
+
+# Activate the virtual environment
+source venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+```
+
+**Windows:**
+```cmd
+# Create a virtual environment
+python -m venv venv
+
+# Activate the virtual environment
+venv\Scripts\activate
 
 # Install dependencies
 pip install -r requirements.txt
@@ -74,10 +89,7 @@ Start the FastAPI server and open the browser-based chat interface. The server c
 
 ```bash
 # From the project root directory
-cd src/proposed/
-
-# Run the FastAPI server
-uvicorn app:app --host 0.0.0.0 --port 8000
+uvicorn src.proposed.app:app --host 0.0.0.0 --port 8000
 ```
 
 Then open **http://localhost:8000** in your browser to interact with the dark-mode glassmorphism UI.
@@ -86,14 +98,14 @@ Then open **http://localhost:8000** in your browser to interact with the dark-mo
 
 | Variable | Default | Description |
 |---|---|---|
-| `MODEL_PATH` | `unsloth/Qwen2.5-7B-Instruct-bnb-4bit` | Path to the base foundation model |
-| `LORA_PATH` | *(none)* | Path to trained LoRA adapters |
+| `MODEL_PATH` | `models/checkpoint_200_CoT` | Path to the LoRA adapters or merged model |
+| `USE_MERGED` | `0` | Set to `1` if using a standalone merged model instead of LoRA |
 | `NO_RAG` | `0` | Set to `1` to disable Hybrid RAG retrieval (answers directly) |
 | `PORT` | `8000` | Web server port |
 
 *Example running with custom LoRA weights and RAG:*
 ```bash
-LORA_PATH=/path/to/your/lora_checkpoints uvicorn app:app --host 0.0.0.0 --port 8000
+MODEL_PATH=/path/to/your/lora_checkpoints uvicorn src.proposed.app:app --host 0.0.0.0 --port 8000
 ```
 
 ---
@@ -104,22 +116,22 @@ Run the inference script directly from the terminal.
 
 ### Interactive Chat Mode
 ```bash
-cd src/proposed/
-python main.py
+# From the project root directory
+python -m src.proposed.main
 ```
 
 ### Single Question Mode
 ```bash
-cd src/proposed/
-python main.py --question "Does aspirin reduce fever?"
+# From the project root directory
+python -m src.proposed.main --question "Does aspirin reduce fever?"
 ```
 
 ### All CLI flags for `main.py`
 | Flag | Description |
 |---|---|
 | `--question` | Single question to answer (omit for interactive chat) |
-| `--model_path` | Base model directory/HF hub name |
-| `--lora_path` | Trained LoRA checkpoint path |
+| `--model_path` | Path to LoRA adapter or merged model dir (Default: models/checkpoint_200_CoT) |
+| `--use_merged` | Load as a merged 16-bit model instead of LoRA adapters |
 | `--no_rag` | Disable Hybrid RAG retrieval |
 | `--max_new_tokens` | Max tokens to generate (default: 512) |
 
@@ -132,8 +144,8 @@ All evaluations are split into evaluating the **Proposed Architecture** and eval
 ### 1. Evaluate the Proposed Architecture
 To evaluate the `Qwen 2.5-7B + QLoRA + Hybrid RAG` system on MedQA:
 ```bash
-cd src/proposed/
-python run_benchmark.py --dataset medqa --mode proposed
+# From the project root directory
+python -m src.proposed.run_benchmark --dataset medqa --mode proposed
 ```
 
 *(Use `--limit 100` to run a smaller subset for quick testing).*
@@ -141,20 +153,20 @@ python run_benchmark.py --dataset medqa --mode proposed
 ### 2. Run MedRAG & MedGraphRAG Ablation Studies (Table 2)
 To reproduce the structural ablation studies isolating the effect of RAG components (BM25, Dense, Hybrid) without QLoRA:
 ```bash
-cd src/baselines/
-python run_all_baselines.py
+# From the project root directory
+python -m src.baselines.run_all_baselines
 ```
 *Note: This script strictly runs local ablations using the Qwen 2.5-7B zero-shot backbone. SOTA models like GPT-4, LLaMA-2 70B, and CURE are cited from literature.*
 
 ### 3. Run Cure-Med 14B / 32B Baselines (Table 1)
 To benchmark the local state-of-the-art open-weights models (Cure-Med):
 ```bash
-cd src/baselines/
+# From the project root directory
 # Run 14B model
-python cure_med_pipeline.py --model 14b
+python -m src.baselines.cure_med_pipeline --model 14b
 
 # Run 32B model (Requires CPU Offloading / device_map="auto")
-python cure_med_pipeline.py --model 32b
+python -m src.baselines.cure_med_pipeline --model 32b
 ```
 
 ---
@@ -164,8 +176,8 @@ python cure_med_pipeline.py --model 32b
 To fine-tune the Qwen 2.5-7B model using QLoRA on the artificial PubMedQA dataset:
 
 ```bash
-cd src/proposed/
-python trainer.py
+# From the project root directory
+python -m src.proposed.trainer
 ```
 
 Training will automatically **resume from the last checkpoint** if one exists.

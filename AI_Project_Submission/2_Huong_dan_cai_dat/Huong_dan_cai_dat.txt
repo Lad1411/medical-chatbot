@@ -18,7 +18,8 @@ HƯỚNG DẪN CÀI ĐẶT VÀ THIẾT LẬP MÔI TRƯỜNG
 
 3. Tải Model LLM & Embedding:
 - Nhóm sử dụng mô hình Qwen-7B được tinh chỉnh (QLoRA).
-- Cấu hình đường dẫn model bằng biến môi trường (Ví dụ trên Windows PowerShell):
+- Mặc định, hệ thống đã được cấu hình tự động tải cấu hình LoRA adapter từ thư mục "models/checkpoint_200_CoT".
+- (Tùy chọn) Cấu hình đường dẫn model khác bằng biến môi trường (Ví dụ trên Windows PowerShell):
   $env:MODEL_PATH="đường_dẫn_tới_thư_mục_model_của_bạn"
 
 4. Khởi chạy ứng dụng Web (FastAPI + Giao diện UI):
